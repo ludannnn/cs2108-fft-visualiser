@@ -14,8 +14,8 @@ tab1, tab2 = st.tabs(["Manual Wave Builder", "Live Audio Analysis"])
 
 #manual wave section
 with tab1:
-    st.header("Build a Signal")
-    st.write("Add multiple sine and cosine waves together to see how they form a waveform in the time domain.")
+    st.header("1. Superposition: Build a Signal")
+    st.write("Add multiple sine and cosine waves together to see how they form a complex waveform.")
     
     col_controls, col_plots = st.columns([1, 2])
     
@@ -23,49 +23,69 @@ with tab1:
         st.subheader("Wave Controls")
         num_waves = st.number_input("Number of components to add:", min_value=1, max_value=5, value=2)
         
-        fs = 1000  # Sample rate
+        fs = 1000
         t = np.linspace(0, 1, fs, endpoint=False)
         y_combined = np.zeros_like(t)
         
-        #sliders based on user input
+        # NEW: Create a list to store each individual wave so we can plot them later
+        individual_waves = [] 
+        
         for i in range(num_waves):
             st.markdown(f"**Component {i+1}**")
             wave_type = st.radio(f"Type", ["Sine", "Cosine"], key=f"type_{i}", horizontal=True)
             freq = st.slider(f"Frequency (Hz)", 1, 50, (i+1)*5, key=f"freq_{i}")
             amp = st.slider(f"Amplitude", 0.1, 10.0, 1.0, key=f"amp_{i}")
             
-            # construct wave with formula -> y(t) = A * sin(2 * pi * f * t)
             if wave_type == "Sine":
-                y_combined += amp * np.sin(2 * np.pi * freq * t)
+                wave = amp * np.sin(2 * np.pi * freq * t)
             else:
-                y_combined += amp * np.cos(2 * np.pi * freq * t)
+                wave = amp * np.cos(2 * np.pi * freq * t)
+                
+            y_combined += wave
+            individual_waves.append({"wave": wave, "freq": freq, "type": wave_type}) # Save it!
             st.divider()
 
     with col_plots:
-        # Plot Time Domain
-        st.subheader("Time Domain")
-        fig_time1, ax_time1 = plt.subplots(figsize=(10, 3))
-        ax_time1.plot(t, y_combined, color='#2E86C1')
+        # 1. Plot Time Domain (The Combined Signal)
+        st.subheader("Step 1: The Combined Signal (Time Domain)")
+        fig_time1, ax_time1 = plt.subplots(figsize=(10, 2.5))
+        ax_time1.plot(t, y_combined, color='#2E86C1', linewidth=2)
         ax_time1.set_xlabel("Time (seconds)")
         ax_time1.set_ylabel("Amplitude")
         ax_time1.grid(True, alpha=0.3)
         st.pyplot(fig_time1)
-        
 
-        # Plot Frequency Domain
-        st.subheader("Frequency Domain")
+        # 2. THE NEW INTERMEDIARY STEP: Wave Decomposition
+        st.subheader("Step 2: Deconstructing the Signal (Intermediary)")
+        st.write("The Fourier Transform essentially 'unmixes' the complex signal back into these pure components:")
+        
+        # Create a dynamic number of subplots based on how many waves the user made
+        fig_inter, axs = plt.subplots(num_waves, 1, figsize=(10, 1.5 * num_waves), sharex=True)
+        
+        # If there's only 1 wave, axs is not an array, so we make it one to prevent errors
+        if num_waves == 1: axs = [axs] 
+        
+        for i, wave_data in enumerate(individual_waves):
+            axs[i].plot(t, wave_data["wave"], color='#E67E22')
+            axs[i].set_ylabel(f"{wave_data['freq']}Hz\n{wave_data['type']}", rotation=0, labelpad=30, va='center')
+            axs[i].grid(True, alpha=0.3)
+            
+        axs[-1].set_xlabel("Time (seconds)")
+        plt.tight_layout()
+        st.pyplot(fig_inter)
+
+        # 3. Plot Frequency Domain (FFT)
+        st.subheader("Step 3: The Frequency Spectrum (Fourier Domain)")
+        st.write("Finally, we map those individual frequencies onto a spectrum. Each spike represents the presence and amplitude of a component.")
         if st.button("Calculate FFT", key="btn_manual"):
-            # Compute FFT
             fft_result = np.fft.fft(y_combined)
             fft_freq = np.fft.fftfreq(len(t), 1/fs)
-            
-            # Normalize and filter for positive frequencies
             magnitudes = np.abs(fft_result) / (fs / 2)
             pos_mask = fft_freq > 0
             
-            fig_freq1, ax_freq1 = plt.subplots(figsize=(10, 3))
+            fig_freq1, ax_freq1 = plt.subplots(figsize=(10, 2.5))
             ax_freq1.stem(fft_freq[pos_mask], magnitudes[pos_mask], basefmt="b-")
-            ax_freq1.set_xlim(0, 60)
+            ax_freq1.set_xlim(0, max(60, (num_waves * 10) + 10)) # Auto-scale the X axis
             ax_freq1.set_xlabel("Frequency (Hz)")
             ax_freq1.set_ylabel("Magnitude")
             ax_freq1.grid(True, alpha=0.3)
