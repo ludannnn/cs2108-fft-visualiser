@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.io import wavfile
 import io
+import time
+import math
 from audio_recorder_streamlit import audio_recorder
 
 st.set_page_config(page_title="FFT Learning Tool", layout="wide")
@@ -18,15 +20,83 @@ C_GREEN  = "#10B981"   # audio time domain
 # Per-component wave colours (cycles if > 5 waves)
 WAVE_COLORS = ["#7C3AED", "#FFD60A", "#00D4FF", "#FF6B9D", "#10B981"]
 
-def style_ax(ax, fig):
+def style_ax(ax, fig, spine_color=None):
     """Apply the dark theme to a matplotlib axes."""
     fig.patch.set_facecolor(BG)
     ax.set_facecolor(AX_BG)
     ax.tick_params(colors=TEXT_CLR)
     ax.xaxis.label.set_color(TEXT_CLR)
     ax.yaxis.label.set_color(TEXT_CLR)
-    ax.spines[:].set_color(GRID_CLR)
+    ax.spines[:].set_color(spine_color if spine_color else GRID_CLR)
+    if spine_color:
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.8)
     ax.grid(True, color=GRID_CLR, alpha=0.6)
+
+def smoothstep(x):
+    x = max(0.0, min(1.0, x))
+    return x * x * (3 - 2 * x)
+
+def draw_decomp_frame(fig, t, y_combined, individual_waves, n_done, cur_idx, cur_progress):
+    """Draw one animation frame of the decomposition."""
+    num_waves = len(individual_waves)
+    nrows = num_waves + 1
+    axes = fig.subplots(nrows, 1, sharex=True)
+    fig.patch.set_facecolor(BG)
+
+    # ── Residual row (top) ──────────────────────────────────────────────────
+    ax0 = axes[0]
+    residual = y_combined.copy()
+    for j in range(n_done):
+        residual -= individual_waves[j]["wave"]
+    if cur_idx >= 0 and n_done < num_waves:
+        residual -= individual_waves[cur_idx]["wave"] * smoothstep(cur_progress)
+
+    cur_color = WAVE_COLORS[cur_idx % len(WAVE_COLORS)] if cur_idx >= 0 else None
+    spine_col = cur_color if (cur_idx >= 0 and n_done < num_waves) else None
+    style_ax(ax0, fig, spine_color=spine_col)
+
+    # Ghost of original signal
+    ax0.plot(t, y_combined, color=C_CYAN, linewidth=1, alpha=0.15)
+    # Residual signal
+    ax0.plot(t, residual, color=C_CYAN, linewidth=2)
+
+    # Pulse overlay: the wave currently being extracted
+    if cur_idx >= 0 and n_done < num_waves:
+        pulse = math.sin(math.pi * cur_progress)          # 0 → 1 → 0 over extraction
+        highlight_alpha = pulse * 0.75
+        ax0.plot(t, individual_waves[cur_idx]["wave"],
+                 color=cur_color, linewidth=1.5, alpha=highlight_alpha)
+
+    ax0.set_ylabel("Residual", color=TEXT_CLR, rotation=0, labelpad=45, va="center", fontsize=8)
+
+    # ── Component rows ──────────────────────────────────────────────────────
+    for i in range(num_waves):
+        ax = axes[i + 1]
+        color = WAVE_COLORS[i % len(WAVE_COLORS)]
+        is_active = (i == cur_idx and n_done < num_waves)
+        style_ax(ax, fig, spine_color=color if is_active else None)
+
+        label_alpha = 1.0
+        if i < n_done:
+            ax.plot(t, individual_waves[i]["wave"], color=color, linewidth=1.5)
+        elif is_active:
+            # Wave grows in during extraction phase
+            appear_progress = smoothstep(max(0, (cur_progress - 0.3) / 0.7))
+            ax.plot(t, individual_waves[i]["wave"], color=color,
+                    linewidth=1.5, alpha=appear_progress)
+            ax.set_facecolor("#1A2030")   # subtle active background
+            label_alpha = max(0.3, appear_progress)
+        else:
+            label_alpha = 0.25           # future waves are dimmed
+
+        freq_label = individual_waves[i]["freq"]
+        type_label = individual_waves[i]["type"]
+        ax.set_ylabel(f"{freq_label}Hz\n{type_label}", rotation=0, labelpad=30,
+                      va="center", color=TEXT_CLR, alpha=label_alpha, fontsize=8)
+
+    axes[-1].set_xlabel("Time (seconds)", color=TEXT_CLR)
+    fig.tight_layout(h_pad=0.4)
 
 st.title("Signal Processing & FFT Interactive Tool")
 st.write("Explore how complex signals are built and deconstructed using the Fast Fourier Transform (FFT).")
@@ -77,26 +147,55 @@ with tab1:
         ax_time1.set_ylabel("Amplitude")
         st.pyplot(fig_time1)
 
-        # 2. THE NEW INTERMEDIARY STEP: Wave Decomposition
-        st.subheader("Step 2: Deconstructing the Signal (Intermediary)")
-        st.write("The Fourier Transform essentially 'unmixes' the complex signal back into these pure components:")
-        
-        # Create a dynamic number of subplots based on how many waves the user made
-        fig_inter, axs = plt.subplots(num_waves, 1, figsize=(10, 1.5 * num_waves), sharex=True)
-        fig_inter.patch.set_facecolor(BG)
+        # 2. Wave Decomposition — animated
+        hdr_col, btn_col = st.columns([3, 1])
+        with hdr_col:
+            st.subheader("Step 2: Deconstructing the Signal (Intermediary)")
+            st.write("The Fourier Transform 'unmixes' the complex signal back into pure components:")
+        with btn_col:
+            st.write("")   # vertical spacer
+            run_anim = st.button("▶ Animate Split", key="btn_animate")
 
-        # If there's only 1 wave, axs is not an array, so we make it one to prevent errors
-        if num_waves == 1: axs = [axs]
+        fig_height = 2.0 * (num_waves + 1)
+        decomp_slot = st.empty()
 
-        for i, wave_data in enumerate(individual_waves):
-            style_ax(axs[i], fig_inter)
-            color = WAVE_COLORS[i % len(WAVE_COLORS)]
-            axs[i].plot(t, wave_data["wave"], color=color)
-            axs[i].set_ylabel(f"{wave_data['freq']}Hz\n{wave_data['type']}", rotation=0, labelpad=30, va='center', color=TEXT_CLR)
+        def draw_static_decomp():
+            fig = plt.figure(figsize=(10, fig_height))
+            draw_decomp_frame(fig, t, y_combined, individual_waves,
+                              n_done=num_waves, cur_idx=-1, cur_progress=1.0)
+            with decomp_slot.container():
+                st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
 
-        axs[-1].set_xlabel("Time (seconds)")
-        plt.tight_layout()
-        st.pyplot(fig_inter)
+        if run_anim:
+            FPWAVE  = 28   # frames to animate each wave being extracted
+            HOLD    = 8    # frames to hold at start (combined) and end (fully split)
+            FPS     = 20   # target frames per second
+
+            total_frames = HOLD + num_waves * FPWAVE + HOLD
+
+            for frame in range(total_frames):
+                adj = frame - HOLD
+
+                if adj < 0:                              # intro hold: show combined
+                    n_done, cur_idx, cur_progress = 0, -1, 0.0
+                elif adj >= num_waves * FPWAVE:          # end hold: fully decomposed
+                    n_done, cur_idx, cur_progress = num_waves, num_waves - 1, 1.0
+                else:
+                    n_done       = adj // FPWAVE
+                    cur_idx      = n_done
+                    cur_progress = (adj % FPWAVE) / FPWAVE
+
+                fig = plt.figure(figsize=(10, fig_height))
+                draw_decomp_frame(fig, t, y_combined, individual_waves,
+                                  n_done, cur_idx, cur_progress)
+                with decomp_slot.container():
+                    st.pyplot(fig, use_container_width=True)
+                plt.close(fig)
+                time.sleep(1 / FPS)
+
+        else:
+            draw_static_decomp()
 
         # 3. Plot Frequency Domain (FFT)
         st.subheader("Step 3: The Frequency Spectrum (Fourier Domain)")
