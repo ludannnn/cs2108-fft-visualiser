@@ -2,6 +2,7 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.io import wavfile
+from scipy.signal import find_peaks, spectrogram
 import io
 import time
 import math
@@ -102,7 +103,7 @@ st.title("Signal Processing & FFT Interactive Tool")
 st.write("Explore how complex signals are built and deconstructed using the Fast Fourier Transform (FFT).")
 
 # Create tabs for the two different features
-tab1, tab2 = st.tabs(["Manual Wave Builder", "Live Audio Analysis"])
+tab1, tab2, tab3 = st.tabs(["Manual Wave Builder", "Live Audio Analysis", "Aliasing & Nyquist"])
 
 #manual wave section
 with tab1:
@@ -249,18 +250,197 @@ with tab2:
         st.pyplot(fig_time2)
         
 
-        # Compute and Plot Frequency Domain (Audio)
-        st.subheader("Frequency Domain")
-        if st.button("Analyze Audio Frequencies", key="btn_audio"):
-            # Use rfft (Real FFT) which is optimized for real-world data like audio
-            fft_result_audio = np.fft.rfft(audio_data)
-            fft_freq_audio = np.fft.rfftfreq(len(t_audio), 1/sample_rate)
-            magnitudes_audio = np.abs(fft_result_audio) / len(t_audio)
-            
+        # Compute and Plot Frequency Domain + Spectrogram
+        st.subheader("Frequency Analysis")
+        if st.button("Analyze Audio", key="btn_audio"):
+            audio_float = audio_data.astype(np.float32)
+
+            # ── FFT with peak annotations ─────────────────────────────────────
+            fft_result_audio = np.fft.rfft(audio_float)
+            fft_freq_audio   = np.fft.rfftfreq(len(audio_float), 1 / sample_rate)
+            magnitudes_audio = np.abs(fft_result_audio) / len(audio_float)
+
+            mask_4k    = fft_freq_audio <= 4000
+            mag_in_4k  = magnitudes_audio.copy()
+            mag_in_4k[~mask_4k] = 0
+            peak_threshold = np.max(mag_in_4k) * 0.05
+
+            peaks_raw, _ = find_peaks(
+                magnitudes_audio,
+                height=peak_threshold,
+                distance=max(1, int(sample_rate / len(audio_float) * 30)),
+                prominence=peak_threshold * 0.4,
+            )
+            # Keep only peaks ≤ 4 kHz, pick top 5 by magnitude
+            peaks_4k  = [p for p in peaks_raw if fft_freq_audio[p] <= 4000]
+            top_peaks = sorted(peaks_4k, key=lambda i: magnitudes_audio[i], reverse=True)[:5]
+
             fig_freq2, ax_freq2 = plt.subplots(figsize=(10, 3))
             style_ax(ax_freq2, fig_freq2)
-            ax_freq2.plot(fft_freq_audio, magnitudes_audio, color=C_PINK)
+            ax_freq2.plot(fft_freq_audio, magnitudes_audio, color=C_PINK, linewidth=1)
             ax_freq2.set_xlim(0, 4000)
             ax_freq2.set_xlabel("Frequency (Hz)")
             ax_freq2.set_ylabel("Magnitude")
+
+            for pk in top_peaks:
+                ax_freq2.annotate(
+                    f"{fft_freq_audio[pk]:.0f} Hz",
+                    xy=(fft_freq_audio[pk], magnitudes_audio[pk]),
+                    xytext=(0, 10), textcoords="offset points",
+                    ha="center", fontsize=7.5, color=TEXT_CLR,
+                    arrowprops=dict(arrowstyle="->", color=TEXT_CLR, lw=0.8),
+                )
+                ax_freq2.plot(fft_freq_audio[pk], magnitudes_audio[pk],
+                              "o", color="#FFD60A", markersize=5, zorder=5)
+
             st.pyplot(fig_freq2)
+            plt.close(fig_freq2)
+
+            # ── Spectrogram ───────────────────────────────────────────────────
+            st.subheader("Spectrogram")
+            st.write("Each vertical slice is an FFT snapshot — this shows how the frequency content changes over time.")
+
+            nperseg = min(512, len(audio_float) // 4)
+            f_spec, t_spec, Sxx = spectrogram(
+                audio_float, fs=sample_rate,
+                nperseg=nperseg, noverlap=nperseg * 3 // 4,
+                window="hann",
+            )
+            Sxx_db = 10 * np.log10(Sxx + 1e-10)
+
+            fig_spec, ax_spec = plt.subplots(figsize=(10, 3.5))
+            style_ax(ax_spec, fig_spec)
+            pcm = ax_spec.pcolormesh(
+                t_spec, f_spec, Sxx_db,
+                cmap="plasma", shading="gouraud",
+                vmin=np.percentile(Sxx_db, 20),   # clip noise floor
+                vmax=Sxx_db.max(),
+            )
+            ax_spec.set_ylim(0, 4000)
+            ax_spec.set_xlabel("Time (seconds)")
+            ax_spec.set_ylabel("Frequency (Hz)")
+            cbar = fig_spec.colorbar(pcm, ax=ax_spec, pad=0.01)
+            cbar.set_label("Power (dB)", color=TEXT_CLR)
+            cbar.ax.tick_params(colors=TEXT_CLR)
+            st.pyplot(fig_spec)
+            plt.close(fig_spec)
+
+# ── Tab 3: Aliasing & Nyquist Explorer ────────────────────────────────────────
+with tab3:
+    st.header("Aliasing & Nyquist Rate Explorer")
+    st.write(
+        "The **Nyquist theorem** says you must sample at least **twice** the signal frequency "
+        "to capture it faithfully. Sample too slowly and the signal 'folds back' — appearing "
+        "at a completely different frequency. Drag the sliders to see it happen."
+    )
+
+    ctrl_col, plot_col = st.columns([1, 2])
+
+    with ctrl_col:
+        f_signal = st.slider("Signal frequency (Hz)", min_value=1, max_value=300, value=50)
+        f_sample = st.slider("Sample rate (Hz)",      min_value=10, max_value=800, value=400)
+
+        nyquist = f_sample / 2
+
+        # Compute aliased frequency
+        f_alias_raw = f_signal % f_sample
+        if f_alias_raw <= nyquist:
+            f_alias    = f_alias_raw
+            alias_sign = 1
+        else:
+            f_alias    = f_sample - f_alias_raw
+            alias_sign = -1
+
+        is_aliasing = f_signal > nyquist
+
+        st.divider()
+        st.metric("Nyquist rate", f"{nyquist:.0f} Hz", help="= sample rate ÷ 2")
+        st.metric("Signal frequency", f"{f_signal} Hz")
+
+        if is_aliasing:
+            st.error(f"Aliasing! {f_signal} Hz > Nyquist ({nyquist:.0f} Hz)")
+            st.metric("Appears as", f"{f_alias:.1f} Hz", delta=f"{f_alias - f_signal:.1f} Hz")
+        else:
+            st.success(f"Clean sampling — no aliasing")
+            headroom = nyquist - f_signal
+            st.metric("Headroom below Nyquist", f"{headroom:.0f} Hz")
+
+    with plot_col:
+        # Time window: show 3 full periods of the true signal or 20 sample intervals
+        t_end  = max(3.0 / f_signal, 20.0 / f_sample)
+        t_cont = np.linspace(0, t_end, 8000)
+        t_samp = np.arange(0, t_end, 1.0 / f_sample)
+        y_cont = np.sin(2 * np.pi * f_signal * t_cont)
+        y_samp = np.sin(2 * np.pi * f_signal * t_samp)
+        # Sinc-reconstructed apparent signal from samples (passes through all sample points)
+        y_apparent = alias_sign * np.sin(2 * np.pi * f_alias * t_cont)
+
+        fig, (ax_time, ax_freq) = plt.subplots(2, 1, figsize=(9, 6))
+        fig.patch.set_facecolor(BG)
+
+        # ── Panel 1: Time domain ──────────────────────────────────────────────
+        style_ax(ax_time, fig)
+        ax_time.plot(t_cont, y_cont, color=C_CYAN, linewidth=1.5,
+                     alpha=0.35 if is_aliasing else 0.8,
+                     label=f"True signal ({f_signal} Hz)")
+
+        if is_aliasing:
+            ax_time.plot(t_cont, y_apparent, color="#FFD60A", linewidth=1.5,
+                         linestyle="--", alpha=0.85,
+                         label=f"Apparent signal ({f_alias:.1f} Hz)")
+
+        # Sample stems
+        markerline, stemlines, baseline = ax_time.stem(
+            t_samp, y_samp, linefmt=C_PINK, markerfmt="o", basefmt=" "
+        )
+        markerline.set_markersize(5)
+        markerline.set_color(C_PINK)
+        plt.setp(stemlines, linewidth=0.8, alpha=0.6)
+        # Fake legend entry for samples
+        ax_time.plot([], [], "o", color=C_PINK, markersize=5, label="Sample points")
+
+        ax_time.set_ylabel("Amplitude", color=TEXT_CLR)
+        ax_time.set_xlabel("Time (s)", color=TEXT_CLR)
+        leg = ax_time.legend(loc="upper right", fontsize=8,
+                             facecolor=AX_BG, edgecolor=GRID_CLR, labelcolor=TEXT_CLR)
+
+        # ── Panel 2: Frequency domain — the "folding" view ───────────────────
+        style_ax(ax_freq, fig)
+
+        # Shade the aliased zone (beyond Nyquist)
+        ax_freq.axvspan(nyquist, f_sample, alpha=0.12, color=C_PINK, label="_nolegend_")
+        ax_freq.axvline(nyquist, color="white", linewidth=1, linestyle="--", alpha=0.5,
+                        label=f"Nyquist limit ({nyquist:.0f} Hz)")
+
+        ax_freq.vlines(f_signal, 0, 1, color=C_CYAN, linewidth=4,
+                       label=f"True: {f_signal} Hz")
+
+        if is_aliasing and f_alias > 0:
+            ax_freq.vlines(f_alias, 0, 0.85, color="#FFD60A", linewidth=4,
+                           label=f"Appears as: {f_alias:.1f} Hz")
+            # Arc arrow showing the fold
+            ax_freq.annotate(
+                "", xy=(f_alias, 0.75), xytext=(f_signal, 0.75),
+                arrowprops=dict(
+                    arrowstyle="->", color="#FFD60A", lw=1.5,
+                    connectionstyle="arc3,rad=-0.35",
+                ),
+            )
+            ax_freq.text(
+                (f_signal + f_alias) / 2, 0.82, "folds back",
+                ha="center", fontsize=7.5, color="#FFD60A", alpha=0.8,
+            )
+
+        ax_freq.set_xlim(0, f_sample)
+        ax_freq.set_ylim(0, 1.15)
+        ax_freq.set_xlabel("Frequency (Hz)", color=TEXT_CLR)
+        ax_freq.set_ylabel("", color=TEXT_CLR)
+        ax_freq.yaxis.set_visible(False)
+        ax_freq.text(nyquist + (f_sample - nyquist) * 0.05, 1.05,
+                     "aliasing zone", fontsize=7.5, color=C_PINK, alpha=0.7)
+        leg2 = ax_freq.legend(loc="upper left", fontsize=8,
+                              facecolor=AX_BG, edgecolor=GRID_CLR, labelcolor=TEXT_CLR)
+
+        fig.tight_layout(h_pad=1.2)
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
