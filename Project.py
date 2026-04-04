@@ -6,6 +6,28 @@ import io
 from audio_recorder_streamlit import audio_recorder
 
 st.set_page_config(page_title="FFT Learning Tool", layout="wide")
+
+# ── Color palette ──────────────────────────────────────────────────────────────
+BG       = "#0D1117"   # figure background
+AX_BG    = "#161B22"   # axes background
+GRID_CLR = "#30363D"   # grid lines
+TEXT_CLR = "#E6EDF3"   # labels / ticks
+C_CYAN   = "#00D4FF"   # combined signal
+C_PINK   = "#FF6B9D"   # frequency spectrum / audio freq
+C_GREEN  = "#10B981"   # audio time domain
+# Per-component wave colours (cycles if > 5 waves)
+WAVE_COLORS = ["#7C3AED", "#FFD60A", "#00D4FF", "#FF6B9D", "#10B981"]
+
+def style_ax(ax, fig):
+    """Apply the dark theme to a matplotlib axes."""
+    fig.patch.set_facecolor(BG)
+    ax.set_facecolor(AX_BG)
+    ax.tick_params(colors=TEXT_CLR)
+    ax.xaxis.label.set_color(TEXT_CLR)
+    ax.yaxis.label.set_color(TEXT_CLR)
+    ax.spines[:].set_color(GRID_CLR)
+    ax.grid(True, color=GRID_CLR, alpha=0.6)
+
 st.title("Signal Processing & FFT Interactive Tool")
 st.write("Explore how complex signals are built and deconstructed using the Fast Fourier Transform (FFT).")
 
@@ -49,10 +71,10 @@ with tab1:
         # 1. Plot Time Domain (The Combined Signal)
         st.subheader("Step 1: The Combined Signal (Time Domain)")
         fig_time1, ax_time1 = plt.subplots(figsize=(10, 2.5))
-        ax_time1.plot(t, y_combined, color='#2E86C1', linewidth=2)
+        style_ax(ax_time1, fig_time1)
+        ax_time1.plot(t, y_combined, color=C_CYAN, linewidth=2)
         ax_time1.set_xlabel("Time (seconds)")
         ax_time1.set_ylabel("Amplitude")
-        ax_time1.grid(True, alpha=0.3)
         st.pyplot(fig_time1)
 
         # 2. THE NEW INTERMEDIARY STEP: Wave Decomposition
@@ -61,15 +83,17 @@ with tab1:
         
         # Create a dynamic number of subplots based on how many waves the user made
         fig_inter, axs = plt.subplots(num_waves, 1, figsize=(10, 1.5 * num_waves), sharex=True)
-        
+        fig_inter.patch.set_facecolor(BG)
+
         # If there's only 1 wave, axs is not an array, so we make it one to prevent errors
-        if num_waves == 1: axs = [axs] 
-        
+        if num_waves == 1: axs = [axs]
+
         for i, wave_data in enumerate(individual_waves):
-            axs[i].plot(t, wave_data["wave"], color='#E67E22')
-            axs[i].set_ylabel(f"{wave_data['freq']}Hz\n{wave_data['type']}", rotation=0, labelpad=30, va='center')
-            axs[i].grid(True, alpha=0.3)
-            
+            style_ax(axs[i], fig_inter)
+            color = WAVE_COLORS[i % len(WAVE_COLORS)]
+            axs[i].plot(t, wave_data["wave"], color=color)
+            axs[i].set_ylabel(f"{wave_data['freq']}Hz\n{wave_data['type']}", rotation=0, labelpad=30, va='center', color=TEXT_CLR)
+
         axs[-1].set_xlabel("Time (seconds)")
         plt.tight_layout()
         st.pyplot(fig_inter)
@@ -84,11 +108,12 @@ with tab1:
             pos_mask = fft_freq > 0
             
             fig_freq1, ax_freq1 = plt.subplots(figsize=(10, 2.5))
-            ax_freq1.stem(fft_freq[pos_mask], magnitudes[pos_mask], basefmt="b-")
-            ax_freq1.set_xlim(0, max(60, (num_waves * 10) + 10)) # Auto-scale the X axis
+            style_ax(ax_freq1, fig_freq1)
+            ax_freq1.stem(fft_freq[pos_mask], magnitudes[pos_mask],
+                          linefmt=C_PINK, markerfmt="o", basefmt=GRID_CLR)
+            ax_freq1.set_xlim(0, max(60, (num_waves * 10) + 10))
             ax_freq1.set_xlabel("Frequency (Hz)")
             ax_freq1.set_ylabel("Magnitude")
-            ax_freq1.grid(True, alpha=0.3)
             st.pyplot(fig_freq1)
             
 
@@ -118,7 +143,8 @@ with tab2:
         # Plot Time Domain of audio
         st.subheader("Time Domain")
         fig_time2, ax_time2 = plt.subplots(figsize=(10, 3))
-        ax_time2.plot(t_audio, audio_data, color='#28B463', linewidth=0.5)
+        style_ax(ax_time2, fig_time2)
+        ax_time2.plot(t_audio, audio_data, color=C_GREEN, linewidth=0.5)
         ax_time2.set_xlabel("Time (seconds)")
         ax_time2.set_ylabel("Amplitude")
         st.pyplot(fig_time2)
@@ -133,9 +159,9 @@ with tab2:
             magnitudes_audio = np.abs(fft_result_audio) / len(t_audio)
             
             fig_freq2, ax_freq2 = plt.subplots(figsize=(10, 3))
-            ax_freq2.plot(fft_freq_audio, magnitudes_audio, color='#E74C3C') 
-            ax_freq2.set_xlim(0, 4000) # Most human voice data is below 4000 Hz
+            style_ax(ax_freq2, fig_freq2)
+            ax_freq2.plot(fft_freq_audio, magnitudes_audio, color=C_PINK)
+            ax_freq2.set_xlim(0, 4000)
             ax_freq2.set_xlabel("Frequency (Hz)")
             ax_freq2.set_ylabel("Magnitude")
-            ax_freq2.grid(True, alpha=0.3)
             st.pyplot(fig_freq2)
