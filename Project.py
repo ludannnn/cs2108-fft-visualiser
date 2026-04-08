@@ -107,7 +107,7 @@ tab1, tab2, tab3 = st.tabs(["Manual Wave Builder", "Live Audio Analysis", "Alias
 
 #manual wave section
 with tab1:
-    st.header("1. Superposition: Build a Signal")
+    st.header("Step 1: Build a Signal")
     st.write("Add multiple sine and cosine waves together to see how they form a complex waveform.")
     
     col_controls, col_plots = st.columns([1, 2])
@@ -151,7 +151,7 @@ with tab1:
         # 2. Wave Decomposition — animated
         hdr_col, btn_col = st.columns([3, 1])
         with hdr_col:
-            st.subheader("Step 2: Deconstructing the Signal (Intermediary)")
+            st.subheader("Step 2: Deconstructing the Signal")
             st.write("The Fourier Transform 'unmixes' the complex signal back into pure components:")
         with btn_col:
             st.write("")   # vertical spacer
@@ -199,7 +199,7 @@ with tab1:
             draw_static_decomp()
 
         # 3. Plot Frequency Domain (FFT)
-        st.subheader("Step 3: The Frequency Spectrum (Fourier Domain)")
+        st.subheader("Step 3: The Frequency Domain")
         st.write("Finally, we map those individual frequencies onto a spectrum. Each spike represents the presence and amplitude of a component.")
         if st.button("Calculate FFT", key="btn_manual"):
             fft_result = np.fft.fft(y_combined)
